@@ -1,0 +1,16 @@
+{
+  "name": "Devlog",
+  "short_name": "Devlog",
+  "description": "Project-centric Markdown work logs stored directly in your own folder.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f4efe6",
+  "theme_color": "#13211f",
+  "icons": [
+    {
+      "src": "./icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

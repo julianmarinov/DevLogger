@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Project-centric Markdown work logs stored directly in your own folder."
+    />
+    <meta name="theme-color" content="#13211f" />
+    <link rel="manifest" href="./site.webmanifest" />
+    <link rel="icon" href="./icons/icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./styles.css" />
+    <title>Devlog</title>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" id="sidebar">
+        <div class="sidebar-top">
+          <button class="brand" id="brand-button" type="button" title="Toggle sidebar">
+            <span class="brand-mark">DL</span>
+            <span class="brand-copy">
+              <strong>Devlog</strong>
+              <small>Folder-backed project notes</small>
+            </span>
+          </button>
+
+          <div class="sidebar-controls">
+            <button class="ghost-button" id="pick-root-button" type="button">Choose Folder</button>
+            <button class="ghost-button" id="new-project-button" type="button" disabled>New Project</button>
+          </div>
+
+          <div class="root-pill" id="root-pill">
+            <span class="root-pill-label">No root selected</span>
+          </div>
+        </div>
+
+        <div class="sidebar-search">
+          <input
+            id="project-search"
+            type="search"
+            placeholder="Filter projects"
+            autocomplete="off"
+            spellcheck="false"
+            disabled
+          />
+        </div>
+
+        <div class="project-list" id="project-list"></div>
+      </aside>
+
+      <main class="workspace">
+        <header class="topbar">
+          <div class="topbar-primary">
+            <p class="eyebrow" id="breadcrumb">No project selected</p>
+            <div class="project-heading">
+              <h1 id="project-title">Project logs, stored as Markdown.</h1>
+              <p id="project-subtitle">
+                Choose a folder, create a project, and type directly into a timestamped daily log.
+              </p>
+            </div>
+          </div>
+
+          <div class="topbar-actions">
+            <div class="doc-switcher" id="doc-switcher">
+              <button class="segment-button is-active" data-doc="log" type="button">Log</button>
+              <button class="segment-button" data-doc="tasks" type="button">Tasks</button>
+              <button class="segment-button" data-doc="info" type="button">Info</button>
+            </div>
+
+            <div class="view-switcher" id="view-switcher">
+              <button class="segment-button is-active" data-view="split" type="button">Split</button>
+              <button class="segment-button" data-view="write" type="button">Write</button>
+              <button class="segment-button" data-view="preview" type="button">Preview</button>
+            </div>
+
+            <button class="secondary-button" id="today-button" type="button" disabled>Today</button>
+            <button class="secondary-button" id="export-button" type="button" disabled>Export</button>
+            <button class="secondary-button" id="settings-button" type="button" disabled>Settings</button>
+          </div>
+        </header>
+
+        <section class="workspace-body">
+          <section class="empty-state" id="empty-state">
+            <div class="empty-card">
+              <p class="eyebrow">North star</p>
+              <h2>Pick a project, type a line, move on.</h2>
+              <p>
+                Devlog writes Markdown into a real folder you control. It is built for Chromium
+                browsers with the File System Access API.
+              </p>
+              <div class="empty-actions">
+                <button class="primary-button" id="empty-pick-root" type="button">Choose Root Folder</button>
+                <button class="secondary-button" id="empty-new-project" type="button" disabled>Create Project</button>
+              </div>
+              <p class="support-note" id="support-note"></p>
+            </div>
+          </section>
+
+          <section class="editor-area is-hidden" id="editor-area">
+            <div class="editor-card">
+              <div class="editor-toolbar" id="editor-toolbar">
+                <button class="tool-button" data-format="bold" type="button"><strong>B</strong></button>
+                <button class="tool-button" data-format="italic" type="button"><em>I</em></button>
+                <button class="tool-button" data-format="code" type="button"><code>{ }</code></button>
+                <button class="tool-button" data-format="link" type="button">Link</button>
+                <button class="tool-button" data-format="task" type="button">Task</button>
+                <button class="tool-button" data-format="quote" type="button">Quote</button>
+                <button class="tool-button" data-format="heading" type="button">H2</button>
+                <button class="tool-button" data-format="codeblock" type="button">Block</button>
+              </div>
+
+              <div class="conflict-banner is-hidden" id="conflict-banner">
+                <div>
+                  <strong>External edit detected.</strong>
+                  <p>The file on disk changed since it was loaded here.</p>
+                </div>
+                <div class="conflict-actions">
+                  <button class="secondary-button" id="reload-disk-button" type="button">Reload Disk Copy</button>
+                  <button class="secondary-button" id="overwrite-disk-button" type="button">Overwrite Disk</button>
+                </div>
+              </div>
+
+              <div class="editor-surface mode-split" id="editor-surface">
+                <label class="pane pane-editor" for="editor-textarea">
+                  <span class="pane-label">Write</span>
+                  <textarea
+                    id="editor-textarea"
+                    spellcheck="false"
+                    autocomplete="off"
+                    autocorrect="off"
+                    autocapitalize="off"
+                    placeholder="Choose a project to start logging."
+                    wrap="soft"
+                  ></textarea>
+                </label>
+
+                <section class="pane pane-preview" aria-label="Preview">
+                  <div class="pane-label-row">
+                    <span class="pane-label">Preview</span>
+                    <span class="preview-badge" id="preview-badge">Muted timestamps</span>
+                  </div>
+                  <div class="markdown-preview timestamps-muted" id="preview"></div>
+                </section>
+              </div>
+
+              <div class="status-row">
+                <div class="status-cluster">
+                  <span class="status-pill" id="save-indicator">Idle</span>
+                  <span class="status-pill" id="doc-kind-pill">Log</span>
+                </div>
+                <div class="status-cluster">
+                  <span class="status-meta" id="file-path">No file loaded</span>
+                  <span class="status-meta" id="word-count">0 words</span>
+                </div>
+              </div>
+            </div>
+          </section>
+        </section>
+      </main>
+    </div>
+
+    <dialog class="app-dialog" id="modal"></dialog>
+
+    <script type="module" src="./src/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title">
+  <title>Devlog</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1d5d52" />
+      <stop offset="100%" stop-color="#123f38" />
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="#f6f0e4" />
+  <rect x="12" y="12" width="104" height="104" rx="24" fill="url(#bg)" />
+  <path d="M36 38h30c16.6 0 30 13.4 30 30S82.6 98 66 98H36V38Zm18 18v24h11c6.6 0 12-5.4 12-12s-5.4-12-12-12H54Z" fill="#f7f4ec" />
+  <path d="M44 68h40" stroke="#d7b48b" stroke-width="8" stroke-linecap="round" />
+</svg>
