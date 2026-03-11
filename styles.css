@@ -347,6 +347,15 @@ textarea {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
 }
 
+.project-row.is-active .project-open strong,
+.project-row.is-active .project-age {
+  color: var(--accent-strong);
+}
+
+.project-row.is-active .project-actions {
+  color: var(--accent-strong);
+}
+
 .project-open {
   display: grid;
   gap: 6px;
@@ -381,16 +390,22 @@ textarea {
 .sidebar.is-collapsed .project-avatar {
   display: grid;
   place-items: center;
-  width: 64px;
-  height: 64px;
-  border-radius: 20px;
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
   border: 1px solid rgba(24, 33, 30, 0.08);
   background: rgba(255, 252, 247, 0.92);
   color: var(--ink);
   font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
-  font-size: 1.6rem;
+  font-size: 1.2rem;
   font-weight: 700;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+.sidebar.is-collapsed .project-row.is-active .project-avatar {
+  background: linear-gradient(145deg, rgba(29, 93, 82, 0.18), rgba(29, 93, 82, 0.06));
+  border-color: rgba(29, 93, 82, 0.22);
+  color: var(--accent-strong);
 }
 
 .project-meta {
@@ -874,7 +889,7 @@ textarea {
 }
 
 .app-dialog {
-  width: min(560px, calc(100vw - 32px));
+  width: min(720px, calc(100vw - 32px));
   padding: 0;
   border: 0;
   border-radius: 28px;
@@ -889,8 +904,8 @@ textarea {
 
 .dialog-card {
   display: grid;
-  gap: 20px;
-  padding: 28px;
+  gap: 16px;
+  padding: 22px;
   border-radius: 28px;
   background: rgba(255, 251, 243, 0.98);
   border: 1px solid rgba(24, 33, 30, 0.08);
@@ -906,6 +921,10 @@ textarea {
 .dialog-fields {
   display: grid;
   gap: 14px;
+}
+
+.compact-gap {
+  gap: 12px;
 }
 
 .dialog-fields.two-up {
@@ -926,9 +945,9 @@ textarea {
 .dialog-field input,
 .dialog-field select {
   width: 100%;
-  min-height: 48px;
-  padding: 12px 14px;
-  border-radius: 16px;
+  min-height: 42px;
+  padding: 10px 12px;
+  border-radius: 14px;
   border: 1px solid rgba(24, 33, 30, 0.12);
   background: rgba(255, 255, 255, 0.94);
   outline: none;
@@ -938,6 +957,92 @@ textarea {
   display: flex;
   justify-content: flex-end;
   gap: 10px;
+}
+
+.settings-dialog {
+  width: 100%;
+  padding: 0;
+  overflow: hidden;
+}
+
+.settings-dialog .dialog-copy,
+.settings-dialog .dialog-actions {
+  padding-inline: 28px;
+}
+
+.settings-dialog .dialog-copy {
+  padding-top: 26px;
+}
+
+.dialog-tabbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 28px;
+  padding: 4px 10px;
+  border-radius: 0;
+  background: rgba(24, 33, 30, 0.05);
+  border-top: 1px solid rgba(24, 33, 30, 0.08);
+  border-bottom: 1px solid rgba(24, 33, 30, 0.08);
+}
+
+.dialog-tab {
+  min-height: 34px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  color: var(--ink-soft);
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.dialog-tab.is-active {
+  background: rgba(255, 255, 255, 0.96);
+  color: var(--ink);
+  box-shadow: 0 1px 2px rgba(24, 33, 30, 0.06);
+}
+
+.dialog-panel {
+  display: none;
+  gap: 12px;
+  margin: 20px 28px 0;
+  padding: 20px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(24, 33, 30, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+.dialog-panel.is-active {
+  display: grid;
+}
+
+.dialog-section {
+  display: grid;
+  gap: 10px;
+  padding: 0;
+}
+
+.dialog-section-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.dialog-inline-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.secondary-button.is-compact,
+.primary-button.is-compact {
+  min-height: 38px;
+  padding: 8px 14px;
+  font-size: 0.94rem;
+}
+
+.settings-dialog .dialog-actions {
+  padding-top: 20px;
+  padding-bottom: 26px;
 }
 
 .is-hidden {

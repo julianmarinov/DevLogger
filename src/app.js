@@ -1152,87 +1152,25 @@ async function handleSettings() {
     return;
   }
 
-  const action = await showChoiceDialog({
-    title: "Settings",
-    description: "Project settings, root-folder access, and export live here so the main workspace stays focused on writing.",
-    choices: [
-      { label: "Project settings", value: "project", kind: "primary" },
-      { label: "Choose folder", value: "root", kind: "secondary" },
-      { label: "Export project", value: "export", kind: "secondary" },
-    ],
-  });
+  const currentProject = findProjectMeta(state.activeProjectId);
+  const result = await showSettingsDialog(currentProject);
 
-  if (!action) {
+  if (!result) {
     return;
   }
 
-  if (action === "root") {
+  if (result.type === "root") {
     await handlePickRoot();
     return;
   }
 
-  if (action === "export") {
-    await handleExport();
+  if (result.type === "export-markdown") {
+    await exportProjectMarkdown(currentProject);
     return;
   }
 
-  const currentProject = findProjectMeta(state.activeProjectId);
-  const values = await showFormDialog({
-    title: "Project settings",
-    description: "Project settings affect future log sections and preview behavior. Existing Markdown is left untouched.",
-    submitLabel: "Save settings",
-    body: `
-      <div class="dialog-fields">
-        <div class="dialog-field">
-          <label for="settings-name">Project name</label>
-          <input id="settings-name" name="name" type="text" value="${escapeHtml(state.activeProjectConfig.name)}" required />
-        </div>
-      </div>
-      <div class="dialog-fields two-up">
-        <div class="dialog-field">
-          <label for="settings-partition">Log partition</label>
-          <select id="settings-partition" name="logPartition">
-            <option value="monthly"${state.activeProjectConfig.logPartition === "monthly" ? " selected" : ""}>Monthly</option>
-            <option value="daily"${state.activeProjectConfig.logPartition === "daily" ? " selected" : ""}>Daily</option>
-            <option value="single"${state.activeProjectConfig.logPartition === "single" ? " selected" : ""}>Single file</option>
-          </select>
-        </div>
-        <div class="dialog-field">
-          <label for="settings-time-format">Time format</label>
-          <select id="settings-time-format" name="timeFormat">
-            <option value="HH:mm"${state.activeProjectConfig.timeFormat === "HH:mm" ? " selected" : ""}>24h (HH:mm)</option>
-            <option value="hh:mm A"${state.activeProjectConfig.timeFormat === "hh:mm A" ? " selected" : ""}>12h (hh:mm A)</option>
-          </select>
-        </div>
-      </div>
-      <div class="dialog-fields">
-        <div class="dialog-field">
-          <label for="settings-date-format">Date format</label>
-          <input id="settings-date-format" name="dateFormat" type="text" value="${escapeHtml(state.activeProjectConfig.dateFormat)}" required />
-        </div>
-      </div>
-      <div class="dialog-fields two-up">
-        <div class="dialog-field">
-          <label for="settings-preview">Preview timestamps</label>
-          <select id="settings-preview" name="timestampVisibility">
-            <option value="muted"${state.appSettings.timestampVisibility === "muted" ? " selected" : ""}>Muted</option>
-            <option value="normal"${state.appSettings.timestampVisibility === "normal" ? " selected" : ""}>Normal</option>
-            <option value="hidden"${state.appSettings.timestampVisibility === "hidden" ? " selected" : ""}>Hidden</option>
-          </select>
-        </div>
-        <div class="dialog-field">
-          <label for="settings-wrap">Soft wrap</label>
-          <select id="settings-wrap" name="softWrap">
-            <option value="true"${state.appSettings.softWrap ? " selected" : ""}>On</option>
-            <option value="false"${!state.appSettings.softWrap ? " selected" : ""}>Off</option>
-          </select>
-        </div>
-      </div>
-      <p class="dialog-note">This build keeps settings local and focuses on the folder-backed MVP flow.</p>
-    `,
-  });
-
-  if (!values) {
+  if (result.type === "export-zip") {
+    await exportProjectZip(currentProject);
     return;
   }
 
@@ -1240,14 +1178,14 @@ async function handleSettings() {
 
   state.activeProjectConfig = normalizeProjectConfig({
     ...state.activeProjectConfig,
-    name: values.name?.trim() || state.activeProjectConfig.name,
-    logPartition: values.logPartition,
-    dateFormat: values.dateFormat?.trim() || state.activeProjectConfig.dateFormat,
-    timeFormat: values.timeFormat || state.activeProjectConfig.timeFormat,
+    name: result.values.name?.trim() || state.activeProjectConfig.name,
+    logPartition: result.values.logPartition,
+    dateFormat: result.values.dateFormat?.trim() || state.activeProjectConfig.dateFormat,
+    timeFormat: result.values.timeFormat || state.activeProjectConfig.timeFormat,
   });
 
-  state.appSettings.timestampVisibility = values.timestampVisibility || state.appSettings.timestampVisibility;
-  state.appSettings.softWrap = values.softWrap !== "false";
+  state.appSettings.timestampVisibility = result.values.timestampVisibility || state.appSettings.timestampVisibility;
+  state.appSettings.softWrap = result.values.softWrap !== "false";
   savePreferences();
   applyEditorWrap();
 
@@ -1260,6 +1198,164 @@ async function handleSettings() {
   await writeManifest();
   renderProjectList();
   await loadDocument(state.activeDoc, { focus: false });
+}
+
+async function showSettingsDialog(currentProject) {
+  return new Promise((resolve) => {
+    refs.modal.innerHTML = `
+      <form class="dialog-card dialog-form settings-dialog" method="dialog">
+        <div class="dialog-copy">
+          <h2>Settings</h2>
+        </div>
+
+        <div class="dialog-tabbar" role="tablist" aria-label="Settings tabs">
+          <button class="dialog-tab is-active" type="button" data-tab="project" role="tab" aria-selected="true">Project</button>
+          <button class="dialog-tab" type="button" data-tab="storage" role="tab" aria-selected="false">Storage</button>
+          <button class="dialog-tab" type="button" data-tab="export" role="tab" aria-selected="false">Export</button>
+        </div>
+
+        <div class="dialog-panel is-active" data-panel="project" role="tabpanel">
+          <div class="dialog-fields compact-gap">
+            <div class="dialog-field">
+              <label for="settings-name">Project name</label>
+              <input id="settings-name" name="name" type="text" value="${escapeHtml(state.activeProjectConfig.name)}" required />
+            </div>
+          </div>
+          <div class="dialog-fields two-up compact-gap">
+            <div class="dialog-field">
+              <label for="settings-partition">Log partition</label>
+              <select id="settings-partition" name="logPartition">
+                <option value="monthly"${state.activeProjectConfig.logPartition === "monthly" ? " selected" : ""}>Monthly</option>
+                <option value="daily"${state.activeProjectConfig.logPartition === "daily" ? " selected" : ""}>Daily</option>
+                <option value="single"${state.activeProjectConfig.logPartition === "single" ? " selected" : ""}>Single file</option>
+              </select>
+            </div>
+            <div class="dialog-field">
+              <label for="settings-time-format">Time format</label>
+              <select id="settings-time-format" name="timeFormat">
+                <option value="HH:mm"${state.activeProjectConfig.timeFormat === "HH:mm" ? " selected" : ""}>24h (HH:mm)</option>
+                <option value="hh:mm A"${state.activeProjectConfig.timeFormat === "hh:mm A" ? " selected" : ""}>12h (hh:mm A)</option>
+              </select>
+            </div>
+          </div>
+          <div class="dialog-fields two-up compact-gap">
+            <div class="dialog-field">
+              <label for="settings-date-format">Date format</label>
+              <input id="settings-date-format" name="dateFormat" type="text" value="${escapeHtml(state.activeProjectConfig.dateFormat)}" required />
+            </div>
+            <div class="dialog-field">
+              <label for="settings-preview">Preview timestamps</label>
+              <select id="settings-preview" name="timestampVisibility">
+                <option value="muted"${state.appSettings.timestampVisibility === "muted" ? " selected" : ""}>Muted</option>
+                <option value="normal"${state.appSettings.timestampVisibility === "normal" ? " selected" : ""}>Normal</option>
+                <option value="hidden"${state.appSettings.timestampVisibility === "hidden" ? " selected" : ""}>Hidden</option>
+              </select>
+            </div>
+          </div>
+          <div class="dialog-fields compact-gap">
+            <div class="dialog-field">
+              <label for="settings-wrap">Soft wrap</label>
+              <select id="settings-wrap" name="softWrap">
+                <option value="true"${state.appSettings.softWrap ? " selected" : ""}>On</option>
+                <option value="false"${!state.appSettings.softWrap ? " selected" : ""}>Off</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="dialog-panel" data-panel="storage" role="tabpanel" hidden>
+          <div class="dialog-section">
+            <p class="dialog-section-title">Root folder</p>
+            <p class="dialog-note">${escapeHtml(state.rootHandle?.name || "No folder selected")}</p>
+            <div class="dialog-inline-actions">
+              <button class="secondary-button is-compact" type="button" data-settings-action="root">Choose folder</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="dialog-panel" data-panel="export" role="tabpanel" hidden>
+          <div class="dialog-section">
+            <p class="dialog-section-title">Export ${escapeHtml(currentProject?.name || state.activeProjectConfig.name)}</p>
+            <p class="dialog-note">Use Markdown for a single readable file or zip to keep the project structure.</p>
+            <div class="dialog-inline-actions">
+              <button class="secondary-button is-compact" type="button" data-settings-action="export-markdown">Markdown</button>
+              <button class="secondary-button is-compact" type="button" data-settings-action="export-zip">Zip archive</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="dialog-actions">
+          <button class="secondary-button is-compact" type="button" data-cancel>Cancel</button>
+          <button class="primary-button is-compact" type="submit">Save</button>
+        </div>
+      </form>
+    `;
+
+    const form = refs.modal.querySelector("form");
+    const tabs = Array.from(form.querySelectorAll("[data-tab]"));
+    const panels = Array.from(form.querySelectorAll("[data-panel]"));
+
+    const cleanup = () => {
+      refs.modal.innerHTML = "";
+    };
+
+    let settled = false;
+    const finish = (value) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      refs.modal.close();
+      cleanup();
+      resolve(value);
+    };
+
+    const activateTab = (tabName) => {
+      tabs.forEach((tab) => {
+        const active = tab.dataset.tab === tabName;
+        tab.classList.toggle("is-active", active);
+        tab.setAttribute("aria-selected", String(active));
+      });
+
+      panels.forEach((panel) => {
+        const active = panel.dataset.panel === tabName;
+        panel.classList.toggle("is-active", active);
+        panel.hidden = !active;
+      });
+    };
+
+    tabs.forEach((tab) => {
+      tab.addEventListener("click", () => activateTab(tab.dataset.tab));
+    });
+
+    form.querySelector("[data-cancel]").addEventListener("click", () => finish(null));
+
+    form.querySelectorAll("[data-settings-action]").forEach((button) => {
+      button.addEventListener("click", () => {
+        finish({ type: button.dataset.settingsAction });
+      });
+    });
+
+    refs.modal.addEventListener(
+      "cancel",
+      (event) => {
+        event.preventDefault();
+        finish(null);
+      },
+      { once: true },
+    );
+
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      finish({
+        type: "save",
+        values: Object.fromEntries(new FormData(form).entries()),
+      });
+    });
+
+    refs.modal.showModal();
+    form.querySelector("input, select, textarea")?.focus();
+  });
 }
 
 function handlePaneResizeStart(event) {
