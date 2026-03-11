@@ -51,6 +51,7 @@ const DEFAULT_APP_SETTINGS = {
   activeDoc: "log",
   activeProjectId: "",
   softWrap: true,
+  splitRatio: 50,
   timestampVisibility: "muted",
   viewMode: "split",
   sidebarCollapsed: false,
@@ -90,6 +91,7 @@ const state = {
     timestampVisibility: preferences.timestampVisibility || "muted",
   },
   sidebarCollapsed: Boolean(preferences.sidebarCollapsed),
+  splitRatio: Number(preferences.splitRatio) || 50,
 };
 
 function loadPreferences() {
@@ -110,6 +112,7 @@ function savePreferences() {
       activeDoc: state.activeDoc,
       activeProjectId: state.activeProjectId,
       softWrap: state.appSettings.softWrap,
+      splitRatio: state.splitRatio,
       timestampVisibility: state.appSettings.timestampVisibility,
       viewMode: state.activeView,
       sidebarCollapsed: state.sidebarCollapsed,
@@ -122,21 +125,20 @@ function byId(id) {
 }
 
 function cacheRefs() {
+  refs.appShell = byId("app-shell");
   refs.sidebar = byId("sidebar");
   refs.brandButton = byId("brand-button");
-  refs.pickRootButton = byId("pick-root-button");
   refs.newProjectButton = byId("new-project-button");
   refs.rootPill = byId("root-pill");
   refs.projectSearch = byId("project-search");
   refs.projectList = byId("project-list");
   refs.breadcrumb = byId("breadcrumb");
   refs.projectTitle = byId("project-title");
-  refs.projectSubtitle = byId("project-subtitle");
   refs.docSwitcher = byId("doc-switcher");
   refs.viewSwitcher = byId("view-switcher");
   refs.todayButton = byId("today-button");
-  refs.exportButton = byId("export-button");
   refs.settingsButton = byId("settings-button");
+  refs.workspaceBody = document.querySelector(".workspace-body");
   refs.emptyState = byId("empty-state");
   refs.emptyPickRoot = byId("empty-pick-root");
   refs.emptyNewProject = byId("empty-new-project");
@@ -147,6 +149,7 @@ function cacheRefs() {
   refs.reloadDiskButton = byId("reload-disk-button");
   refs.overwriteDiskButton = byId("overwrite-disk-button");
   refs.editorSurface = byId("editor-surface");
+  refs.paneResizer = byId("pane-resizer");
   refs.editor = byId("editor-textarea");
   refs.preview = byId("preview");
   refs.previewBadge = byId("preview-badge");
@@ -159,7 +162,6 @@ function cacheRefs() {
 
 function bindEvents() {
   refs.brandButton.addEventListener("click", handleSidebarToggle);
-  refs.pickRootButton.addEventListener("click", handlePickRoot);
   refs.emptyPickRoot.addEventListener("click", handlePickRoot);
   refs.newProjectButton.addEventListener("click", handleNewProject);
   refs.emptyNewProject.addEventListener("click", handleNewProject);
@@ -168,12 +170,8 @@ function bindEvents() {
   refs.docSwitcher.addEventListener("click", handleDocSwitchClick);
   refs.viewSwitcher.addEventListener("click", handleViewSwitchClick);
   refs.todayButton.addEventListener("click", handleJumpToToday);
-  refs.exportButton.addEventListener("click", () => {
-    handleExport().catch((error) => {
-      showError("Export failed.", error);
-    });
-  });
   refs.settingsButton.addEventListener("click", handleSettings);
+  refs.paneResizer.addEventListener("pointerdown", handlePaneResizeStart);
   refs.editorToolbar.addEventListener("click", handleToolbarClick);
   refs.editor.addEventListener("keydown", handleEditorKeydown);
   refs.editor.addEventListener("input", handleEditorInput);
@@ -553,6 +551,11 @@ async function loadDocument(docType, options = {}) {
 
   refs.editor.value = text;
   refs.editor.placeholder = descriptor.placeholder;
+  refs.workspaceBody.scrollTop = 0;
+  refs.editor.scrollTop = 0;
+  refs.editor.scrollLeft = 0;
+  refs.editor.setSelectionRange(0, 0);
+  refs.preview.scrollTop = 0;
 
   if (options.focus !== false) {
     refs.editor.focus();
@@ -638,7 +641,6 @@ function renderWorkspace() {
   refs.projectSearch.disabled = !state.rootHandle || state.rootPermission !== "granted";
   refs.newProjectButton.disabled = !state.rootHandle || state.rootPermission !== "granted";
   refs.emptyNewProject.disabled = !state.rootHandle || state.rootPermission !== "granted";
-  refs.exportButton.disabled = !hasProject;
   refs.settingsButton.disabled = !hasProject;
   refs.todayButton.disabled = !hasProject || state.activeDoc !== "log";
   refs.emptyState.classList.toggle("is-hidden", hasProject);
@@ -654,14 +656,9 @@ function renderWorkspace() {
   if (hasProject) {
     refs.breadcrumb.textContent = `${state.rootHandle?.name || "Root"} / ${state.activeProjectConfig.name}`;
     refs.projectTitle.textContent = state.activeProjectConfig.name;
-    refs.projectSubtitle.textContent = buildProjectSubtitle();
   } else {
     refs.breadcrumb.textContent = "No project selected";
     refs.projectTitle.textContent = "Project logs, stored as Markdown.";
-    refs.projectSubtitle.textContent =
-      state.rootPermission === "needs-permission"
-        ? "The saved folder needs a fresh permission grant. Choose it again to reconnect."
-        : "Choose a folder, create a project, and type directly into a timestamped daily log.";
   }
 
   updateDocSwitcher();
@@ -670,19 +667,6 @@ function renderWorkspace() {
   updateSaveIndicator();
   updateStatusRow();
   updateConflictBanner();
-}
-
-function buildProjectSubtitle() {
-  if (!state.activeProjectConfig || !state.currentDocumentDescriptor) {
-    return "";
-  }
-
-  const partitionLabel =
-    state.activeDoc === "log"
-      ? `${titleFromSlug(state.activeProjectConfig.logPartition)} logs`
-      : `${DOC_LABELS[state.activeDoc]} note`;
-
-  return `${partitionLabel} · ${state.activeProjectConfig.timeFormat} timestamps · ${state.activeProjectConfig.dateFormat}`;
 }
 
 function updateDocSwitcher() {
@@ -782,14 +766,17 @@ function renderProjectList() {
       return `
         <div class="project-row${isActive ? " is-active" : ""}">
           <button class="project-open" type="button" data-action="open" data-project-id="${escapeHtml(project.id)}">
+            <span class="project-avatar">${escapeHtml(project.name.trim().charAt(0).toUpperCase() || project.id.charAt(0).toUpperCase())}</span>
             <strong>${escapeHtml(project.name)}</strong>
-            <small>${escapeHtml(humanizeLastEdited(project.lastEdited))}</small>
           </button>
-          <div class="project-actions">
-            <button class="project-action" type="button" title="Info" data-action="info" data-project-id="${escapeHtml(project.id)}">I</button>
-            <button class="project-action" type="button" title="Tasks" data-action="tasks" data-project-id="${escapeHtml(project.id)}">T</button>
-            <button class="project-action" type="button" title="Export" data-action="export" data-project-id="${escapeHtml(project.id)}">EX</button>
-            <button class="project-action" type="button" title="Delete" data-action="delete" data-project-id="${escapeHtml(project.id)}">DEL</button>
+          <div class="project-meta">
+            <div class="project-actions">
+              <button class="project-action" type="button" title="Info" data-action="info" data-project-id="${escapeHtml(project.id)}">info</button>
+              <button class="project-action" type="button" title="Tasks" data-action="tasks" data-project-id="${escapeHtml(project.id)}">tasks</button>
+              <button class="project-action" type="button" title="Export" data-action="export" data-project-id="${escapeHtml(project.id)}">export</button>
+              <button class="project-action" type="button" title="Delete" data-action="delete" data-project-id="${escapeHtml(project.id)}">delete</button>
+            </div>
+            <span class="project-age">${escapeHtml(humanizeLastEdited(project.lastEdited))}</span>
           </div>
         </div>
       `;
@@ -799,6 +786,7 @@ function renderProjectList() {
 
 function applySidebarState() {
   refs.sidebar?.classList.toggle("is-collapsed", state.sidebarCollapsed);
+  refs.appShell?.classList.toggle("is-sidebar-collapsed", state.sidebarCollapsed);
 }
 
 function applyViewMode() {
@@ -808,6 +796,13 @@ function applyViewMode() {
 
   refs.editorSurface.classList.remove("mode-write", "mode-preview", "mode-split");
   refs.editorSurface.classList.add(`mode-${state.activeView}`);
+
+  if (state.activeView === "split") {
+    refs.editorSurface.style.gridTemplateColumns = `minmax(280px, ${state.splitRatio}fr) 14px minmax(280px, ${100 - state.splitRatio}fr)`;
+    return;
+  }
+
+  refs.editorSurface.style.removeProperty("grid-template-columns");
 }
 
 function applyEditorWrap() {
@@ -1157,6 +1152,30 @@ async function handleSettings() {
     return;
   }
 
+  const action = await showChoiceDialog({
+    title: "Settings",
+    description: "Project settings, root-folder access, and export live here so the main workspace stays focused on writing.",
+    choices: [
+      { label: "Project settings", value: "project", kind: "primary" },
+      { label: "Choose folder", value: "root", kind: "secondary" },
+      { label: "Export project", value: "export", kind: "secondary" },
+    ],
+  });
+
+  if (!action) {
+    return;
+  }
+
+  if (action === "root") {
+    await handlePickRoot();
+    return;
+  }
+
+  if (action === "export") {
+    await handleExport();
+    return;
+  }
+
   const currentProject = findProjectMeta(state.activeProjectId);
   const values = await showFormDialog({
     title: "Project settings",
@@ -1241,6 +1260,30 @@ async function handleSettings() {
   await writeManifest();
   renderProjectList();
   await loadDocument(state.activeDoc, { focus: false });
+}
+
+function handlePaneResizeStart(event) {
+  if (state.activeView !== "split") {
+    return;
+  }
+
+  event.preventDefault();
+
+  const move = (moveEvent) => {
+    const rect = refs.editorSurface.getBoundingClientRect();
+    const nextRatio = ((moveEvent.clientX - rect.left) / rect.width) * 100;
+    state.splitRatio = Math.max(28, Math.min(72, nextRatio));
+    savePreferences();
+    applyViewMode();
+  };
+
+  const stop = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", stop);
+  };
+
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", stop, { once: true });
 }
 
 function handleToolbarClick(event) {

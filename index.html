@@ -14,20 +14,19 @@
     <title>Devlog</title>
   </head>
   <body>
-    <div class="app-shell">
+    <div class="app-shell" id="app-shell">
       <aside class="sidebar" id="sidebar">
         <div class="sidebar-top">
-          <button class="brand" id="brand-button" type="button" title="Toggle sidebar">
-            <span class="brand-mark">DL</span>
-            <span class="brand-copy">
-              <strong>Devlog</strong>
-              <small>Folder-backed project notes</small>
-            </span>
-          </button>
+          <div class="brand-row">
+            <button class="brand" id="brand-button" type="button" title="Toggle sidebar">
+              <span class="brand-mark">DL</span>
+              <span class="brand-copy">
+                <strong>Devlog</strong>
+                <small>Folder-backed project notes</small>
+              </span>
+            </button>
 
-          <div class="sidebar-controls">
-            <button class="ghost-button" id="pick-root-button" type="button">Choose Folder</button>
-            <button class="ghost-button" id="new-project-button" type="button" disabled>New Project</button>
+            <button class="icon-button" id="new-project-button" type="button" disabled aria-label="New project">+</button>
           </div>
 
           <div class="root-pill" id="root-pill">
@@ -53,30 +52,19 @@
         <header class="topbar">
           <div class="topbar-primary">
             <p class="eyebrow" id="breadcrumb">No project selected</p>
-            <div class="project-heading">
+            <div class="project-heading-row">
               <h1 id="project-title">Project logs, stored as Markdown.</h1>
-              <p id="project-subtitle">
-                Choose a folder, create a project, and type directly into a timestamped daily log.
-              </p>
+              <div class="title-actions">
+                <button class="secondary-button" id="today-button" type="button" disabled>Today</button>
+                <button class="secondary-button" id="settings-button" type="button" disabled>Settings</button>
+              </div>
             </div>
           </div>
 
-          <div class="topbar-actions">
-            <div class="doc-switcher" id="doc-switcher">
-              <button class="segment-button is-active" data-doc="log" type="button">Log</button>
-              <button class="segment-button" data-doc="tasks" type="button">Tasks</button>
-              <button class="segment-button" data-doc="info" type="button">Info</button>
-            </div>
-
-            <div class="view-switcher" id="view-switcher">
-              <button class="segment-button is-active" data-view="split" type="button">Split</button>
-              <button class="segment-button" data-view="write" type="button">Write</button>
-              <button class="segment-button" data-view="preview" type="button">Preview</button>
-            </div>
-
-            <button class="secondary-button" id="today-button" type="button" disabled>Today</button>
-            <button class="secondary-button" id="export-button" type="button" disabled>Export</button>
-            <button class="secondary-button" id="settings-button" type="button" disabled>Settings</button>
+          <div class="doc-switcher" id="doc-switcher">
+            <button class="segment-button is-active" data-doc="log" type="button">Log</button>
+            <button class="segment-button" data-doc="tasks" type="button">Tasks</button>
+            <button class="segment-button" data-doc="info" type="button">Info</button>
           </div>
         </header>
 
@@ -100,14 +88,23 @@
           <section class="editor-area is-hidden" id="editor-area">
             <div class="editor-card">
               <div class="editor-toolbar" id="editor-toolbar">
-                <button class="tool-button" data-format="bold" type="button"><strong>B</strong></button>
-                <button class="tool-button" data-format="italic" type="button"><em>I</em></button>
-                <button class="tool-button" data-format="code" type="button"><code>{ }</code></button>
-                <button class="tool-button" data-format="link" type="button">Link</button>
-                <button class="tool-button" data-format="task" type="button">Task</button>
-                <button class="tool-button" data-format="quote" type="button">Quote</button>
-                <button class="tool-button" data-format="heading" type="button">H2</button>
-                <button class="tool-button" data-format="codeblock" type="button">Block</button>
+                <div class="toolbar-group">
+                  <button class="tool-button" data-format="bold" type="button" title="Bold"><strong>B</strong></button>
+                  <button class="tool-button" data-format="italic" type="button" title="Italic"><em>I</em></button>
+                  <button class="tool-button" data-format="code" type="button" title="Inline code"><code>&lt;/&gt;</code></button>
+                  <button class="tool-button" data-format="link" type="button" title="Link">@</button>
+                  <button class="tool-button" data-format="task" type="button" title="Task">[]</button>
+                  <button class="tool-button" data-format="quote" type="button" title="Quote">&gt;</button>
+                  <button class="tool-button" data-format="heading" type="button" title="Heading">#</button>
+                  <button class="tool-button" data-format="codeblock" type="button" title="Code block">...</button>
+                </div>
+                <div class="toolbar-spacer"></div>
+                <div class="toolbar-divider" aria-hidden="true"></div>
+                <div class="view-switcher toolbar-view-switcher" id="view-switcher">
+                  <button class="segment-button is-active" data-view="split" type="button">Split</button>
+                  <button class="segment-button" data-view="write" type="button">Write</button>
+                  <button class="segment-button" data-view="preview" type="button">Preview</button>
+                </div>
               </div>
 
               <div class="conflict-banner is-hidden" id="conflict-banner">
@@ -134,6 +131,8 @@
                     wrap="soft"
                   ></textarea>
                 </label>
+
+                <button class="pane-resizer" id="pane-resizer" type="button" aria-label="Resize panels"></button>
 
                 <section class="pane pane-preview" aria-label="Preview">
                   <div class="pane-label-row">
