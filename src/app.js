@@ -20,8 +20,10 @@ import {
   getDirectoryIfExists,
   getFileIfExists,
   getFileText,
+  isDesktopEnvironment,
   isFileSystemAccessSupported,
   listDirectory,
+  onDesktopFlushRequest,
   loadHandle,
   pickRootDirectory,
   readJsonFile,
@@ -29,6 +31,7 @@ import {
   removeDirectory,
   requestPermission,
   saveHandle,
+  saveBlobFile,
   writeJsonFile,
   writeTextFile,
 } from "./fs.js";
@@ -59,6 +62,9 @@ const DEFAULT_APP_SETTINGS = {
 
 const refs = {};
 const preferences = loadPreferences();
+let saveQueue = Promise.resolve();
+let logKeyQueue = Promise.resolve();
+let pendingLogKeys = 0;
 
 const state = {
   support: isFileSystemAccessSupported(),
@@ -160,27 +166,47 @@ function cacheRefs() {
   refs.modal = byId("modal");
 }
 
+// Async handlers surface failures to the user instead of becoming silent unhandled rejections.
+function safely(handler) {
+  return (...args) => {
+    Promise.resolve()
+      .then(() => handler(...args))
+      .catch((error) => {
+        if (error?.name !== "AbortError") {
+          showError(error?.message ? `Something went wrong: ${error.message}` : "Something went wrong.", error);
+        }
+      });
+  };
+}
+
 function bindEvents() {
   refs.brandButton.addEventListener("click", handleSidebarToggle);
-  refs.emptyPickRoot.addEventListener("click", handlePickRoot);
-  refs.newProjectButton.addEventListener("click", handleNewProject);
-  refs.emptyNewProject.addEventListener("click", handleNewProject);
+  refs.emptyPickRoot.addEventListener("click", safely(handlePickRoot));
+  refs.newProjectButton.addEventListener("click", safely(handleNewProject));
+  refs.emptyNewProject.addEventListener("click", safely(handleNewProject));
   refs.projectSearch.addEventListener("input", handleProjectFilter);
-  refs.projectList.addEventListener("click", handleProjectListClick);
-  refs.docSwitcher.addEventListener("click", handleDocSwitchClick);
+  refs.projectList.addEventListener("click", safely(handleProjectListClick));
+  refs.docSwitcher.addEventListener("click", safely(handleDocSwitchClick));
   refs.viewSwitcher.addEventListener("click", handleViewSwitchClick);
-  refs.todayButton.addEventListener("click", handleJumpToToday);
-  refs.settingsButton.addEventListener("click", handleSettings);
+  refs.todayButton.addEventListener("click", safely(handleJumpToToday));
+  refs.settingsButton.addEventListener("click", safely(handleSettings));
   refs.paneResizer.addEventListener("pointerdown", handlePaneResizeStart);
+  // Keep focus (and the selection) in the editor when a toolbar button is pressed.
+  refs.editorToolbar.addEventListener("mousedown", (event) => {
+    if (event.target.closest("[data-format]")) {
+      event.preventDefault();
+    }
+  });
   refs.editorToolbar.addEventListener("click", handleToolbarClick);
   refs.editor.addEventListener("keydown", handleEditorKeydown);
   refs.editor.addEventListener("input", handleEditorInput);
   refs.editor.addEventListener("blur", handleEditorBlur);
   refs.reloadDiskButton.addEventListener("click", handleReloadDiskCopy);
-  refs.overwriteDiskButton.addEventListener("click", handleOverwriteDiskCopy);
+  refs.overwriteDiskButton.addEventListener("click", safely(handleOverwriteDiskCopy));
   window.addEventListener("keydown", handleGlobalKeydown);
   window.addEventListener("pagehide", handlePageHide);
   document.addEventListener("visibilitychange", handleVisibilityChange);
+  onDesktopFlushRequest(flushPendingSaves);
 }
 
 async function init() {
@@ -197,7 +223,7 @@ async function init() {
 }
 
 function registerServiceWorker() {
-  if (!("serviceWorker" in navigator)) {
+  if (isDesktopEnvironment() || !("serviceWorker" in navigator)) {
     return;
   }
 
@@ -237,9 +263,11 @@ async function restoreRootFromStorage() {
 }
 
 function updateSupportNote() {
-  refs.supportNote.textContent = state.support
-    ? "Direct folder access works best in Chrome, Edge, Arc, or another Chromium browser."
-    : "This browser cannot grant a writable folder handle, so the app cannot store Markdown in your chosen directory.";
+  refs.supportNote.textContent = isDesktopEnvironment()
+    ? "Desktop mode uses native folder access, so your Markdown files are saved directly without a browser permission flow."
+    : state.support
+      ? "Direct folder access works best in Chrome, Edge, Arc, or another Chromium browser."
+      : "This browser cannot grant a writable folder handle, so the app cannot store Markdown in your chosen directory.";
 }
 
 async function handlePickRoot() {
@@ -309,14 +337,12 @@ async function loadManifest() {
 
   const scannedProjects = await scanRootProjects(baseManifest.projects);
   const mergedProjects = new Map();
+  const manifestByPath = new Map(baseManifest.projects.map((project) => [project.path || project.id, project]));
 
-  for (const project of baseManifest.projects) {
-    mergedProjects.set(project.path || project.id, { ...project });
-  }
-
+  // The folder scan is authoritative: manifest entries whose directory is gone are dropped.
   for (const project of scannedProjects) {
     const key = project.path || project.id;
-    const existing = mergedProjects.get(key);
+    const existing = manifestByPath.get(key);
     mergedProjects.set(key, {
       ...existing,
       ...project,
@@ -459,8 +485,7 @@ async function inferLastEdited(projectHandle) {
         continue;
       }
 
-      const fileHandle = await logsHandle.getFileHandle(entry.name);
-      const file = await getFileText(fileHandle);
+      const file = await getFileText(entry.handle);
       latest = Math.max(latest, file.lastModified);
     }
   }
@@ -504,12 +529,23 @@ async function openProject(projectId, options = {}) {
     return;
   }
 
-  await persistCurrentDocument({ force: true, prune: true });
+  if (!(await saveBeforeLeaving())) {
+    return;
+  }
+
   state.activeProjectId = projectId;
   savePreferences();
 
-  const projectHandle =
-    state.projectHandles.get(projectId) || (await state.rootHandle.getDirectoryHandle(nextProject.path));
+  let projectHandle = state.projectHandles.get(projectId);
+
+  if (!projectHandle) {
+    projectHandle = await getDirectoryIfExists(state.rootHandle, nextProject.path);
+  }
+
+  if (!projectHandle) {
+    throw new Error(`Project directory not found: ${nextProject.path}`);
+  }
+
   state.projectHandles.set(projectId, projectHandle);
   state.activeProjectHandle = projectHandle;
 
@@ -823,6 +859,7 @@ function updatePreview() {
   refs.preview.classList.add(`timestamps-${state.appSettings.timestampVisibility}`);
   refs.preview.innerHTML = renderMarkdown(state.currentContent, {
     todayKey: getDateKey(new Date()),
+    dateFormat: state.activeProjectConfig?.dateFormat,
   });
 
   refs.previewBadge.textContent =
@@ -957,7 +994,10 @@ async function makeUniqueProjectId(projectName) {
   let candidate = baseId;
   let suffix = 2;
 
-  while (state.manifest.projects.some((project) => project.id === candidate || project.path === candidate)) {
+  while (
+    state.manifest.projects.some((project) => project.id === candidate || project.path === candidate) ||
+    (await getDirectoryIfExists(state.rootHandle, candidate))
+  ) {
     candidate = `${baseId}-${suffix}`;
     suffix += 1;
   }
@@ -973,8 +1013,9 @@ async function deleteProject(projectId) {
 
   const confirmed = await showConfirmDialog({
     title: `Delete ${project.name}?`,
-    description:
-      "Browsers cannot move folders to the system Trash here, so this permanently removes the project directory from the selected root.",
+    description: isDesktopEnvironment()
+      ? "This permanently removes the project directory from the selected root folder."
+      : "Browsers cannot move folders to the system Trash here, so this permanently removes the project directory from the selected root.",
     confirmLabel: "Delete project",
   });
 
@@ -1017,8 +1058,9 @@ async function handleDocSwitchClick(event) {
     return;
   }
 
-  await persistCurrentDocument({ force: true, prune: true });
-  await loadDocument(nextDoc);
+  if (await saveBeforeLeaving()) {
+    await loadDocument(nextDoc);
+  }
 }
 
 function handleViewSwitchClick(event) {
@@ -1060,8 +1102,16 @@ async function handleExport(projectId = state.activeProjectId) {
 }
 
 async function exportProjectMarkdown(project) {
-  const projectHandle =
-    state.projectHandles.get(project.id) || (await state.rootHandle.getDirectoryHandle(project.path));
+  let projectHandle = state.projectHandles.get(project.id);
+
+  if (!projectHandle) {
+    projectHandle = await getDirectoryIfExists(state.rootHandle, project.path);
+  }
+
+  if (!projectHandle) {
+    throw new Error(`Project directory not found: ${project.path}`);
+  }
+
   const logsHandle = await getDirectoryIfExists(projectHandle, "logs");
   const sections = [`# ${project.name}`, ""];
 
@@ -1071,8 +1121,7 @@ async function exportProjectMarkdown(project) {
       .sort((left, right) => right.name.localeCompare(left.name));
 
     for (const entry of entries) {
-      const fileHandle = await logsHandle.getFileHandle(entry.name);
-      const file = await getFileText(fileHandle);
+      const file = await getFileText(entry.handle);
       const stripped = stripFrontmatter(normalizeLineEndings(file.text)).trim();
 
       if (!stripped) {
@@ -1094,12 +1143,24 @@ async function exportProjectMarkdown(project) {
   }
 
   const output = `${sections.join("\n").replace(/\n{3,}/g, "\n\n").trim()}\n`;
-  await saveBlob(new Blob([output], { type: "text/markdown;charset=utf-8" }), `${project.path}.md`, "text/markdown");
+  await saveBlobFile(
+    new Blob([output], { type: "text/markdown;charset=utf-8" }),
+    `${project.path}.md`,
+    "text/markdown",
+  );
 }
 
 async function exportProjectZip(project) {
-  const projectHandle =
-    state.projectHandles.get(project.id) || (await state.rootHandle.getDirectoryHandle(project.path));
+  let projectHandle = state.projectHandles.get(project.id);
+
+  if (!projectHandle) {
+    projectHandle = await getDirectoryIfExists(state.rootHandle, project.path);
+  }
+
+  if (!projectHandle) {
+    throw new Error(`Project directory not found: ${project.path}`);
+  }
+
   const files = await collectProjectFiles(projectHandle);
   const blob = createZip(
     files.map((file) => ({
@@ -1108,43 +1169,7 @@ async function exportProjectZip(project) {
       lastModified: file.lastModified,
     })),
   );
-  await saveBlob(blob, `${project.path}.zip`, "application/zip");
-}
-
-async function saveBlob(blob, suggestedName, mimeType) {
-  if ("showSaveFilePicker" in window) {
-    try {
-      const extension = suggestedName.split(".").pop();
-      const handle = await window.showSaveFilePicker({
-        suggestedName,
-        types: [
-          {
-            description: mimeType,
-            accept: {
-              [mimeType]: [`.${extension}`],
-            },
-          },
-        ],
-      });
-      const writable = await handle.createWritable();
-      await writable.write(blob);
-      await writable.close();
-      return;
-    } catch (error) {
-      if (error.name === "AbortError") {
-        return;
-      }
-
-      throw error;
-    }
-  }
-
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = suggestedName;
-  link.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  await saveBlobFile(blob, `${project.path}.zip`, "application/zip");
 }
 
 async function handleSettings() {
@@ -1174,7 +1199,9 @@ async function handleSettings() {
     return;
   }
 
-  await persistCurrentDocument({ force: true, prune: true });
+  if (!(await saveBeforeLeaving())) {
+    return;
+  }
 
   state.activeProjectConfig = normalizeProjectConfig({
     ...state.activeProjectConfig,
@@ -1391,7 +1418,7 @@ function handleToolbarClick(event) {
   applyFormat(button.dataset.format);
 }
 
-async function handleEditorKeydown(event) {
+function handleEditorKeydown(event) {
   if (!state.activeProjectConfig) {
     return;
   }
@@ -1453,16 +1480,19 @@ async function handleEditorKeydown(event) {
     return;
   }
 
-  if (state.activeDoc === "log" && isPlainTextInsertion(event)) {
-    const bootstrapped = await maybeBootstrapLogTyping(event);
-    if (bootstrapped) {
+  if (state.activeDoc === "log" && !event.isComposing && (isPlainTextInsertion(event) || event.key === "Enter")) {
+    // Anything that needs file I/O first (a new month or day file) must cancel the native
+    // keystroke synchronously; the key is then replayed once the right document is loaded.
+    if (pendingLogKeys > 0 || needsLogBootstrap(event.key)) {
+      event.preventDefault();
+      queueLogKey(event.key);
       return;
     }
   }
 
   if (event.key === "Enter") {
     if (state.activeDoc === "log") {
-      const handled = await handleLogEnter(event);
+      const handled = handleLogEnter(event);
       if (handled) {
         return;
       }
@@ -1487,13 +1517,14 @@ function handleEditorInput() {
     state.saveStatus = state.dirty ? "draft" : state.saveStatus;
   }
 
-  updatePreview();
   renderWorkspace();
   scheduleSave();
 }
 
-async function handleEditorBlur() {
-  await persistCurrentDocument({ force: true, prune: true });
+function handleEditorBlur() {
+  persistCurrentDocument({ force: true, prune: true }).catch((error) => {
+    showError("Could not save the current note.", error);
+  });
 }
 
 function scheduleSave() {
@@ -1510,101 +1541,124 @@ function scheduleSave() {
   }, 700);
 }
 
-async function persistCurrentDocument(options = {}) {
-  if (!state.currentDocumentDescriptor || !state.activeProjectConfig) {
-    return false;
+// Saves run one at a time so a slow write can never interleave with the next one.
+function persistCurrentDocument(options = {}) {
+  const run = saveQueue.then(() => persistDocumentNow(options));
+  saveQueue = run.catch(() => {});
+  return run;
+}
+
+// Saves before navigating away from the current note. Returns false (and keeps the note
+// open) when the save hit an external-edit conflict, so unsaved text is never discarded.
+async function saveBeforeLeaving() {
+  const saved = await persistCurrentDocument({ force: true, prune: true });
+
+  if (!saved) {
+    window.alert("This note was changed on disk. Choose Reload Disk Copy or Overwrite Disk before switching.");
+  }
+
+  return saved;
+}
+
+function flushPendingSaves() {
+  return persistCurrentDocument({ force: true, prune: true }).catch((error) => {
+    console.error("Could not save before closing.", error);
+  });
+}
+
+// Never rewrites the textarea: pruning only shapes what is written to disk, so the
+// cursor and in-progress bullets survive blur, window switches, and background saves.
+async function persistDocumentNow(options = {}) {
+  const descriptor = state.currentDocumentDescriptor;
+  const projectId = state.activeProjectId;
+
+  if (!descriptor || !state.activeProjectConfig) {
+    return true;
   }
 
   clearTimeout(state.pendingSaveTimer);
 
-  const normalized = prepareDocumentForSave(state.currentContent, options.prune);
+  const snapshot = state.currentContent;
+  const lastLoadedDiskContent = state.lastLoadedDiskContent;
+  const normalized = prepareDocumentForSave(snapshot, options.prune, descriptor);
+  const isCurrent = () => state.currentDocumentDescriptor === descriptor;
+  const settle = () => {
+    state.dirty = state.currentContent !== snapshot;
+    if (state.dirty) {
+      scheduleSave();
+    }
+  };
 
   if (!options.overwrite && normalized === state.baselineContent) {
-    if (options.prune && normalized !== refs.editor.value) {
-      refs.editor.value = normalized;
-    }
-
-    state.currentContent = normalized;
     state.dirty = false;
     state.saveStatus = state.activeFileExists ? "synced" : "draft";
-    updatePreview();
     renderWorkspace();
     return true;
   }
 
-  const existsOnDisk = await readTextFile(
-    state.currentDocumentDescriptor.directoryHandle,
-    state.currentDocumentDescriptor.fileName,
-  );
+  const existsOnDisk = await readTextFile(descriptor.directoryHandle, descriptor.fileName);
 
   if (
     existsOnDisk.exists &&
-    state.lastLoadedDiskContent !== null &&
-    normalizeLineEndings(existsOnDisk.text) !== normalizeLineEndings(state.lastLoadedDiskContent) &&
+    lastLoadedDiskContent !== null &&
+    normalizeLineEndings(existsOnDisk.text) !== normalizeLineEndings(lastLoadedDiskContent) &&
     !options.overwrite
   ) {
-    state.conflict = {
-      diskText: normalizeLineEndings(existsOnDisk.text),
-      memoryText: normalized,
-    };
-    state.saveStatus = "conflict";
-    renderWorkspace();
+    if (isCurrent()) {
+      state.conflict = {
+        diskText: normalizeLineEndings(existsOnDisk.text),
+        memoryText: normalized,
+      };
+      state.saveStatus = "conflict";
+      renderWorkspace();
+    }
     return false;
   }
 
-  const meaningful = isMeaningfulDocument(normalized);
-
-  if (!meaningful && !existsOnDisk.exists) {
-    if (options.prune && normalized !== refs.editor.value) {
-      refs.editor.value = normalized;
+  if (!isMeaningfulDocument(normalized, descriptor) && !existsOnDisk.exists) {
+    if (isCurrent()) {
+      state.baselineContent = normalized;
+      state.lastLoadedDiskContent = null;
+      state.activeFileExists = false;
+      state.saveStatus = "draft";
+      settle();
+      renderWorkspace();
     }
-
-    state.currentContent = normalized;
-    state.baselineContent = normalized;
-    state.lastLoadedDiskContent = null;
-    state.activeFileExists = false;
-    state.dirty = false;
-    state.saveStatus = "draft";
-    updatePreview();
-    renderWorkspace();
     return true;
   }
 
-  state.saveStatus = "saving";
-  renderWorkspace();
-
-  const contentToWrite = normalized;
-  await writeTextFile(state.currentDocumentDescriptor.directoryHandle, state.currentDocumentDescriptor.fileName, contentToWrite);
-
-  if (options.prune && contentToWrite !== refs.editor.value) {
-    refs.editor.value = contentToWrite;
+  if (isCurrent()) {
+    state.saveStatus = "saving";
+    renderWorkspace();
   }
 
-  state.currentContent = contentToWrite;
-  state.baselineContent = contentToWrite;
-  state.lastLoadedDiskContent = contentToWrite;
-  state.activeFileExists = true;
-  state.dirty = false;
-  state.saveStatus = "synced";
-  state.conflict = null;
+  await writeTextFile(descriptor.directoryHandle, descriptor.fileName, normalized);
 
-  await touchProjectManifest();
-  updatePreview();
+  if (isCurrent()) {
+    state.baselineContent = normalized;
+    state.lastLoadedDiskContent = normalized;
+    state.activeFileExists = true;
+    state.conflict = null;
+    settle();
+    state.saveStatus = state.dirty ? "draft" : "synced";
+  }
+
+  await touchProjectManifest(projectId);
   renderWorkspace();
   return true;
 }
 
-function prepareDocumentForSave(content, prune) {
+function prepareDocumentForSave(content, prune, descriptor) {
   const normalized = normalizeLineEndings(content);
 
-  if (state.activeDoc === "log") {
-    return finalizeLogDocument(normalized, prune);
+  if (descriptor.docType === "log") {
+    return finalizeLogDocument(normalized, prune, descriptor.scaffold);
   }
 
-  return finalizeNoteDocument(normalized, prune);
+  return finalizeNoteDocument(normalized, prune, descriptor.scaffold);
 }
 
-function finalizeLogDocument(content, prune) {
+function finalizeLogDocument(content, prune, scaffold) {
   const cleaned = content
     .split("\n")
     .map((line) => line.replace(/[ \t]+$/g, ""))
@@ -1623,13 +1677,13 @@ function finalizeLogDocument(content, prune) {
   const collapsed = withoutEmptyDates.replace(/\n{3,}/g, "\n\n").trimEnd();
 
   if (!hasMeaningfulLogContent(collapsed)) {
-    return ensureTrailingNewline(state.currentDocumentDescriptor.scaffold);
+    return ensureTrailingNewline(scaffold);
   }
 
   return ensureTrailingNewline(collapsed);
 }
 
-function finalizeNoteDocument(content, prune) {
+function finalizeNoteDocument(content, prune, scaffold) {
   const trimmedLines = content
     .split("\n")
     .map((line) => line.replace(/[ \t]+$/g, ""))
@@ -1641,21 +1695,21 @@ function finalizeNoteDocument(content, prune) {
   }
 
   const trimmed = trimmedLines.trimEnd();
-  return ensureTrailingNewline(trimmed || state.currentDocumentDescriptor.scaffold.trimEnd());
+  return ensureTrailingNewline(trimmed || scaffold.trimEnd());
 }
 
-function isMeaningfulDocument(content) {
-  if (state.activeDoc === "log") {
+function isMeaningfulDocument(content, descriptor) {
+  if (descriptor.docType === "log") {
     return hasMeaningfulLogContent(content);
   }
 
-  return normalizeComparable(content) !== normalizeComparable(state.currentDocumentDescriptor.scaffold);
+  return normalizeComparable(content) !== normalizeComparable(descriptor.scaffold);
 }
 
 function hasMeaningfulLogContent(content) {
   const body = stripFrontmatter(content)
     .split("\n")
-    .filter((line) => !line.startsWith("# ") && !parseDateHeading(line))
+    .filter((line) => !line.startsWith("# ") && !parseDayHeading(line))
     .filter((line) => !/^\s*-\s+\[(\d{1,2}:\d{2}(?:\s?[AP]M)?)\]\s*$/.test(line.trim()))
     .join("\n");
 
@@ -1669,7 +1723,7 @@ function removeEmptyDateSections(content) {
 
   while (index < lines.length) {
     const currentLine = lines[index];
-    const headingKey = parseDateHeading(currentLine);
+    const headingKey = parseDayHeading(currentLine);
 
     if (!headingKey) {
       output.push(currentLine);
@@ -1678,7 +1732,7 @@ function removeEmptyDateSections(content) {
     }
 
     let endIndex = index + 1;
-    while (endIndex < lines.length && !parseDateHeading(lines[endIndex])) {
+    while (endIndex < lines.length && !parseDayHeading(lines[endIndex])) {
       endIndex += 1;
     }
 
@@ -1702,13 +1756,12 @@ function removeEmptyDateSections(content) {
   return output.join("\n");
 }
 
-async function touchProjectManifest() {
-  const project = findProjectMeta(state.activeProjectId);
+async function touchProjectManifest(projectId) {
+  const project = findProjectMeta(projectId);
   if (!project) {
     return;
   }
 
-  project.name = state.activeProjectConfig.name;
   project.lastEdited = toIso(new Date());
   await writeManifest();
   renderProjectList();
@@ -1724,7 +1777,10 @@ async function maybeEnsureCurrentLogDocument() {
     return false;
   }
 
-  await persistCurrentDocument({ force: true, prune: true });
+  if (!(await persistCurrentDocument({ force: true, prune: true }))) {
+    return false;
+  }
+
   await loadDocument("log", { focus: false, date: new Date() });
   return true;
 }
@@ -1743,31 +1799,91 @@ function getExpectedLogPath(date) {
   return `logs/${getMonthKey(date)}.md`;
 }
 
-async function maybeBootstrapLogTyping(event) {
-  await maybeEnsureCurrentLogDocument();
-
-  const todayKey = getDateKey(new Date());
-  if (documentHasDateHeading(state.currentContent, todayKey)) {
-    return false;
-  }
-
-  event.preventDefault();
-
-  let seedText = event.key;
-  state.ignoreNextLeadingSpace = false;
-
-  if (seedText === "-" || seedText === " ") {
-    seedText = "";
-    state.ignoreNextLeadingSpace = event.key === "-";
-  }
-
-  insertTodayEntry(seedText);
-  return true;
+function isLogRolloverNeeded() {
+  return (
+    state.activeDoc === "log" &&
+    Boolean(state.activeProjectConfig) &&
+    state.currentDocumentDescriptor?.relativePath !== getExpectedLogPath(new Date())
+  );
 }
 
-async function handleLogEnter(event) {
-  await maybeEnsureCurrentLogDocument();
+function needsLogBootstrap(key) {
+  if (isLogRolloverNeeded()) {
+    return true;
+  }
 
+  return key !== "Enter" && !documentHasDateHeading(state.currentContent, getDateKey(new Date()));
+}
+
+function queueLogKey(key) {
+  pendingLogKeys += 1;
+  logKeyQueue = logKeyQueue
+    .then(() => replayLogKey(key))
+    .catch((error) => showError("Could not update today's log.", error))
+    .finally(() => {
+      pendingLogKeys -= 1;
+    });
+}
+
+async function replayLogKey(key) {
+  if (state.activeDoc !== "log" || !state.activeProjectConfig) {
+    return;
+  }
+
+  if (await maybeEnsureCurrentLogDocument()) {
+    placeCursorInTodaySection();
+  }
+
+  if (key === "Enter") {
+    if (!handleLogEnter({ preventDefault() {} })) {
+      insertAtCursor("\n");
+    }
+    return;
+  }
+
+  if (!documentHasDateHeading(state.currentContent, getDateKey(new Date()))) {
+    state.ignoreNextLeadingSpace = key === "-";
+    insertTodayEntry(key === "-" || key === " " ? "" : key);
+    return;
+  }
+
+  if (state.ignoreNextLeadingSpace && key === " ") {
+    state.ignoreNextLeadingSpace = false;
+    return;
+  }
+
+  state.ignoreNextLeadingSpace = false;
+  insertAtCursor(key);
+}
+
+function insertAtCursor(text) {
+  replaceSelection(refs.editor.selectionStart, refs.editor.selectionEnd, text, text.length, text.length);
+}
+
+// After switching to a freshly loaded log file, put the cursor at the end of today's
+// section (if it already exists) rather than at the top of the frontmatter.
+function placeCursorInTodaySection() {
+  const lines = normalizeLineEndings(refs.editor.value).split("\n");
+  const todayKey = getDateKey(new Date());
+  const headingIndex = lines.findIndex((line) => parseDayHeading(line) === todayKey);
+
+  if (headingIndex === -1) {
+    return;
+  }
+
+  let lastLine = headingIndex;
+  for (let index = headingIndex + 1; index < lines.length && !parseDayHeading(lines[index]); index += 1) {
+    if (lines[index].trim()) {
+      lastLine = index;
+    }
+  }
+
+  const cursor = charIndexFromLine(lines, lastLine) + lines[lastLine].length;
+  refs.editor.focus();
+  refs.editor.setSelectionRange(cursor, cursor);
+}
+
+function handleLogEnter(event) {
   const selectionStart = refs.editor.selectionStart;
   const selectionEnd = refs.editor.selectionEnd;
   const todayKey = getDateKey(new Date());
@@ -1793,7 +1909,7 @@ async function handleLogEnter(event) {
   if (
     /^\s*-\s+/.test(line.text) ||
     /^\s*$/.test(line.text) ||
-    parseDateHeading(line.text) === todayKey
+    parseDayHeading(line.text) === todayKey
   ) {
     event.preventDefault();
     const indent = line.text.match(/^\s*/)?.[0] || "";
@@ -1890,10 +2006,14 @@ function findBodyInsertLine(lines) {
   return index;
 }
 
+function parseDayHeading(line) {
+  return parseDateHeading(line, state.activeProjectConfig?.dateFormat);
+}
+
 function documentHasDateHeading(content, targetDateKey) {
   return normalizeLineEndings(content)
     .split("\n")
-    .some((line) => parseDateHeading(line) === targetDateKey);
+    .some((line) => parseDayHeading(line) === targetDateKey);
 }
 
 function getSectionKeyAtCursor(content, cursorIndex) {
@@ -1901,7 +2021,7 @@ function getSectionKeyAtCursor(content, cursorIndex) {
   let currentKey = null;
 
   for (const line of lines) {
-    const heading = parseDateHeading(line);
+    const heading = parseDayHeading(line);
     if (heading) {
       currentKey = heading;
     }
@@ -1963,7 +2083,7 @@ function applyFormat(format) {
       wrapSelection("`", "`", "code");
       break;
     case "link":
-      insertLink();
+      safely(insertLink)();
       break;
     case "task":
       toggleTaskAtSelection();
@@ -1992,27 +2112,52 @@ function wrapSelection(prefix, suffix, placeholder) {
   replaceSelection(selectionStart, selectionEnd, replacement, cursorStart, cursorEnd);
 }
 
-function prefixSelectionLines(prefix) {
-  const selectionStart = refs.editor.selectionStart;
-  const selectionEnd = refs.editor.selectionEnd;
-  const lineStart = refs.editor.value.lastIndexOf("\n", selectionStart - 1) + 1;
-  const lineEndIndex = refs.editor.value.indexOf("\n", selectionEnd);
-  const lineEnd = lineEndIndex === -1 ? refs.editor.value.length : lineEndIndex;
-  const block = refs.editor.value.slice(lineStart, lineEnd);
-  const updated = block
-    .split("\n")
-    .map((line) => `${prefix}${line}`)
-    .join("\n");
+// Applies a per-line transform to every line touched by the selection. A collapsed cursor
+// stays where it was (shifted by the change on its line) instead of selecting the line.
+function transformSelectedLines(transform) {
+  const { selectionStart, selectionEnd, value } = refs.editor;
+  const lineStart = value.lastIndexOf("\n", selectionStart - 1) + 1;
+  const lineEndIndex = value.indexOf("\n", selectionEnd);
+  const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+  const lines = value.slice(lineStart, lineEnd).split("\n");
+  const updated = lines.map(transform).join("\n");
+
+  if (selectionStart === selectionEnd && lines.length === 1) {
+    const offset = selectionStart - lineStart + (updated.length - lines[0].length);
+    const cursor = Math.max(0, Math.min(updated.length, offset));
+    replaceSelection(lineStart, lineEnd, updated, cursor, cursor);
+    return;
+  }
+
   replaceSelection(lineStart, lineEnd, updated, 0, updated.length);
 }
 
-function insertLink() {
+function prefixSelectionLines(prefix) {
+  transformSelectedLines((line) => `${prefix}${line}`);
+}
+
+// window.prompt is not available in Electron, so links and find use the app's own dialog.
+async function insertLink() {
   const selectionStart = refs.editor.selectionStart;
   const selectionEnd = refs.editor.selectionEnd;
   const selectedText = refs.editor.value.slice(selectionStart, selectionEnd) || "link";
-  const url = window.prompt("Link URL", "https://");
+  const values = await showFormDialog({
+    title: "Insert link",
+    description: "Paste the address to link to.",
+    submitLabel: "Insert link",
+    body: `
+      <div class="dialog-fields">
+        <div class="dialog-field">
+          <label for="link-url">URL</label>
+          <input id="link-url" name="url" type="text" value="https://" autocomplete="off" spellcheck="false" required />
+        </div>
+      </div>
+    `,
+  });
 
-  if (!url) {
+  const url = values?.url?.trim();
+  if (!url || url === "https://") {
+    refs.editor.focus();
     return;
   }
 
@@ -2021,60 +2166,42 @@ function insertLink() {
 }
 
 function toggleTaskAtSelection() {
-  const selectionStart = refs.editor.selectionStart;
-  const selectionEnd = refs.editor.selectionEnd;
-  const lineStart = refs.editor.value.lastIndexOf("\n", selectionStart - 1) + 1;
-  const lineEndIndex = refs.editor.value.indexOf("\n", selectionEnd);
-  const lineEnd = lineEndIndex === -1 ? refs.editor.value.length : lineEndIndex;
-  const block = refs.editor.value.slice(lineStart, lineEnd);
-  const updated = block
-    .split("\n")
-    .map((line) => {
-      if (/^\s*-\s+\[( |x|X)\]\s+/.test(line)) {
-        return line.replace(/\[( |x|X)\]/, (_match, checked) => (checked.toLowerCase() === "x" ? "[ ]" : "[x]"));
-      }
+  transformSelectedLines((line) => {
+    if (/^\s*-\s+\[( |x|X)\]\s+/.test(line)) {
+      return line.replace(/\[( |x|X)\]/, (_match, checked) => (checked.toLowerCase() === "x" ? "[ ]" : "[x]"));
+    }
 
-      if (/^\s*-\s+/.test(line)) {
-        return line.replace(/^\s*-\s+/, (match) => `${match}[ ] `);
-      }
+    if (/^\s*-\s+/.test(line)) {
+      return line.replace(/^\s*-\s+/, (match) => `${match}[ ] `);
+    }
 
-      if (!line.trim()) {
-        return "- [ ] ";
-      }
+    if (!line.trim()) {
+      return "- [ ] ";
+    }
 
-      return `- [ ] ${line.trim()}`;
-    })
-    .join("\n");
-
-  replaceSelection(lineStart, lineEnd, updated, 0, updated.length);
+    return `- [ ] ${line.trim()}`;
+  });
 }
 
 function adjustIndent(delta) {
-  const selectionStart = refs.editor.selectionStart;
-  const selectionEnd = refs.editor.selectionEnd;
-  const lineStart = refs.editor.value.lastIndexOf("\n", selectionStart - 1) + 1;
-  const lineEndIndex = refs.editor.value.indexOf("\n", selectionEnd);
-  const lineEnd = lineEndIndex === -1 ? refs.editor.value.length : lineEndIndex;
-  const block = refs.editor.value.slice(lineStart, lineEnd);
-  const updated = block
-    .split("\n")
-    .map((line) => {
-      if (delta > 0) {
-        return `${" ".repeat(delta)}${line}`;
-      }
+  transformSelectedLines((line) => {
+    if (delta > 0) {
+      return `${" ".repeat(delta)}${line}`;
+    }
 
-      if (line.startsWith(" ".repeat(-delta))) {
-        return line.slice(-delta);
-      }
+    if (line.startsWith(" ".repeat(-delta))) {
+      return line.slice(-delta);
+    }
 
-      return line.replace(/^\s+/, (spaces) => spaces.slice(Math.min(spaces.length, -delta)));
-    })
-    .join("\n");
-
-  replaceSelection(lineStart, lineEnd, updated, 0, updated.length);
+    return line.replace(/^\s+/, (spaces) => spaces.slice(Math.min(spaces.length, -delta)));
+  });
 }
 
 function handleGlobalKeydown(event) {
+  if (refs.modal.open) {
+    return;
+  }
+
   if (!state.activeProjectConfig) {
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "p") {
       event.preventDefault();
@@ -2099,13 +2226,13 @@ function handleGlobalKeydown(event) {
 
   if (key === "j") {
     event.preventDefault();
-    handleJumpToToday();
+    safely(handleJumpToToday)();
     return;
   }
 
   if (key === "f") {
     event.preventDefault();
-    openFindDialog();
+    safely(openFindDialog)();
   }
 }
 
@@ -2120,7 +2247,7 @@ async function handleJumpToToday() {
   let targetLine = findBodyInsertLine(lines);
 
   for (let index = 0; index < lines.length; index += 1) {
-    if (parseDateHeading(lines[index]) === todayKey) {
+    if (parseDayHeading(lines[index]) === todayKey) {
       targetLine = index;
       break;
     }
@@ -2131,9 +2258,24 @@ async function handleJumpToToday() {
   refs.editor.setSelectionRange(targetIndex, targetIndex);
 }
 
-function openFindDialog() {
-  const query = window.prompt("Find in current note", state.lastFindTerm || "");
+async function openFindDialog() {
+  const values = await showFormDialog({
+    title: "Find in note",
+    description: "Searches the current note from the cursor, wrapping around to the top.",
+    submitLabel: "Find next",
+    body: `
+      <div class="dialog-fields">
+        <div class="dialog-field">
+          <label for="find-query">Text</label>
+          <input id="find-query" name="query" type="text" value="${escapeHtml(state.lastFindTerm || "")}" autocomplete="off" spellcheck="false" required />
+        </div>
+      </div>
+    `,
+  });
+
+  const query = values?.query;
   if (!query) {
+    refs.editor.focus();
     return;
   }
 
@@ -2182,12 +2324,12 @@ async function handleOverwriteDiskCopy() {
 }
 
 function handlePageHide() {
-  persistCurrentDocument({ force: true, prune: true, overwrite: false }).catch(() => {});
+  flushPendingSaves();
 }
 
 function handleVisibilityChange() {
   if (document.visibilityState === "hidden") {
-    persistCurrentDocument({ force: true, prune: true, overwrite: false }).catch(() => {});
+    flushPendingSaves();
   }
 }
 

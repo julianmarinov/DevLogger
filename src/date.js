@@ -56,15 +56,17 @@ export function humanizeLastEdited(isoString) {
   }
 
   if (deltaMs < hour) {
-    return `${Math.max(1, Math.round(deltaMs / minute))} min ago`;
+    return `${Math.max(1, Math.floor(deltaMs / minute))} min ago`;
   }
 
   if (deltaMs < day) {
-    return `${Math.max(1, Math.round(deltaMs / hour))} hr ago`;
+    const hours = Math.max(1, Math.floor(deltaMs / hour));
+    return `${hours} ${hours === 1 ? "hr" : "hrs"} ago`;
   }
 
   if (deltaMs < day * 7) {
-    return `${Math.max(1, Math.round(deltaMs / day))} days ago`;
+    const days = Math.max(1, Math.floor(deltaMs / day));
+    return `${days} ${days === 1 ? "day" : "days"} ago`;
   }
 
   return `${getDateKey(date)} ${getTimestamp(date, "HH:mm")}`;
@@ -89,9 +91,45 @@ export function formatDate(date = new Date(), pattern = "YYYY-MM-DD (ddd)") {
   return replacements.reduce((result, [token, value]) => result.replaceAll(token, value), pattern);
 }
 
-export function parseDateHeading(line) {
+const headingParserCache = new Map();
+
+function buildHeadingMatcher(pattern) {
+  if (headingParserCache.has(pattern)) {
+    return headingParserCache.get(pattern);
+  }
+
+  const tokens = { YYYY: "(?<year>\\d{4})", MM: "(?<month>\\d{2})", DD: "(?<day>\\d{2})", ddd: `(?:${WEEKDAYS.join("|")})` };
+  let source = "";
+  let index = 0;
+
+  while (index < pattern.length) {
+    const token = Object.keys(tokens).find((candidate) => pattern.startsWith(candidate, index));
+    if (token) {
+      source += tokens[token];
+      index += token.length;
+    } else {
+      source += pattern[index].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      index += 1;
+    }
+  }
+
+  const hasDate = ["YYYY", "MM", "DD"].every((token) => pattern.includes(token));
+  const matcher = hasDate ? new RegExp(`^##\\s+${source}(?:\\s|$)`) : null;
+  headingParserCache.set(pattern, matcher);
+  return matcher;
+}
+
+// Returns the ISO date key (YYYY-MM-DD) for a "## <date>" heading, accepting ISO dates
+// and headings written with the project's custom date format.
+export function parseDateHeading(line, pattern) {
   const match = line.match(/^##\s+(\d{4}-\d{2}-\d{2})(?:\s|$)/);
-  return match ? match[1] : null;
+  if (match) {
+    return match[1];
+  }
+
+  const matcher = pattern ? buildHeadingMatcher(pattern) : null;
+  const custom = matcher ? line.match(matcher) : null;
+  return custom ? `${custom.groups.year}-${custom.groups.month}-${custom.groups.day}` : null;
 }
 
 export function compareIsoDesc(left, right) {

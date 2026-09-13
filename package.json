@@ -1,0 +1,104 @@
+{
+  "name": "devlog",
+  "version": "0.1.0",
+  "productName": "Devlog",
+  "author": "Julian Marinov",
+  "description": "Project-centric Markdown work logs as a desktop Electron app.",
+  "license": "MIT",
+  "homepage": "https://github.com/julianmarinov/DevLogger#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/julianmarinov/DevLogger.git"
+  },
+  "bugs": {
+    "url": "https://github.com/julianmarinov/DevLogger/issues"
+  },
+  "main": "electron/main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "dist": "electron-builder --publish never",
+    "build:mac": "electron-builder --mac --publish never",
+    "build:win": "electron-builder --win --publish never",
+    "build:linux": "electron-builder --linux --publish never",
+    "release": "electron-builder --publish always"
+  },
+  "devDependencies": {
+    "electron": "^37.0.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.devlog.desktop",
+    "productName": "Devlog",
+    "asar": true,
+    "icon": "build-resources/icon.png",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build-resources"
+    },
+    "files": [
+      "electron/**/*",
+      "src/**/*",
+      "icons/**/*",
+      "index.html",
+      "styles.css",
+      "site.webmanifest",
+      "sw.js",
+      "package.json"
+    ],
+    "mac": {
+      "icon": "build-resources/icon.png",
+      "category": "public.app-category.productivity",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ]
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "julianmarinov",
+        "repo": "DevLogger",
+        "releaseType": "draft"
+      }
+    ],
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "linux": {
+      "category": "Office",
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    }
+  }
+}

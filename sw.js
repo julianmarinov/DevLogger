@@ -1,4 +1,4 @@
-const CACHE_NAME = "devlog-shell-v1";
+const CACHE_NAME = "devlog-shell-v2";
 const ASSETS = [
   "./",
   "./index.html",
@@ -39,26 +39,24 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
+// Network first so updates reach users immediately; the cache is only an offline fallback.
 self.addEventListener("fetch", (event) => {
-  if (event.request.method !== "GET") {
+  const url = new URL(event.request.url);
+
+  if (event.request.method !== "GET" || url.origin !== self.location.origin) {
     return;
   }
 
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      if (cached) {
-        return cached;
-      }
-
-      return fetch(event.request).then((response) => {
-        const clone = response.clone();
-
-        caches.open(CACHE_NAME).then((cache) => {
-          cache.put(event.request, clone);
-        });
+    fetch(event.request)
+      .then((response) => {
+        if (response.ok) {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+        }
 
         return response;
-      });
-    }),
+      })
+      .catch(() => caches.match(event.request).then((cached) => cached || Response.error())),
   );
 });

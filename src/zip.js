@@ -1,3 +1,6 @@
+// General purpose bit 11: file names are UTF-8 encoded.
+const UTF8_FLAG = 0x0800;
+
 const CRC_TABLE = (() => {
   const table = new Uint32Array(256);
 
@@ -73,7 +76,7 @@ export function createZip(files) {
     const localHeader = [
       u32(0x04034b50),
       u16(20),
-      u16(0),
+      u16(UTF8_FLAG),
       u16(0),
       u16(dosTime),
       u16(dosDate),
@@ -93,7 +96,7 @@ export function createZip(files) {
       u32(0x02014b50),
       u16(20),
       u16(20),
-      u16(0),
+      u16(UTF8_FLAG),
       u16(0),
       u16(dosTime),
       u16(dosDate),
